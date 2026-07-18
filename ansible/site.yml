@@ -1,0 +1,50 @@
+---
+# Deploys production AND test secretweb instances side by side on every
+# host in secretweb_hosts - one parameterized set of roles
+# (provision_environment.yml -> secretweb_app/secretweb_pki/secretweb_service),
+# applied once per environment below. Nothing in those roles is hardcoded
+# to a single instance, so running both here is what makes "prod and test
+# coexist on one host safely" a structural property rather than something
+# kept in sync by hand.
+#
+# Select just one with --tags prod or --tags test (e.g. to deploy/update
+# only the test instance): `ansible-playbook site.yml -i inventory/hosts.yml
+# --tags test` (run from within this ansible/ directory). Two explicit
+# tasks below (not a loop
+# over a list) is what makes that possible - tags apply per task, not per
+# loop iteration, so a single looped task couldn't be filtered down to one
+# environment.
+- name: Deploy secretweb (production + test)
+  hosts: secretweb_hosts
+  become: true
+  vars:
+    secretweb_prod_vars:
+      env: prod
+      install_dir: /opt/secretweb
+      port: 59222
+      unit_name: secretweb
+      user: secretweb
+      ca_name: secretweb-network-ca
+      cert_cn: "{{ inventory_hostname }}"
+      symlink_client: true
+    secretweb_test_vars:
+      env: test
+      install_dir: /opt/secretweb_test
+      port: 59111
+      unit_name: secretweb-test
+      user: secretweb-test
+      ca_name: secretweb-network-test-ca
+      cert_cn: "{{ inventory_hostname }}-test"
+      symlink_client: false
+  tasks:
+    - name: Provision the production environment
+      ansible.builtin.import_tasks: provision_environment.yml
+      vars:
+        secretweb_env_vars: "{{ secretweb_prod_vars }}"
+      tags: [prod]
+
+    - name: Provision the test environment
+      ansible.builtin.import_tasks: provision_environment.yml
+      vars:
+        secretweb_env_vars: "{{ secretweb_test_vars }}"
+      tags: [test]

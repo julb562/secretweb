@@ -1,0 +1,57 @@
+---
+# Deploys one secretweb install (app tree + own venv + config.ini) into
+# secretweb_install_dir, owned by secretweb_user. Runs once per
+# environment (prod/test) per host - see site.yml - so every
+# path here is driven entirely by role variables, nothing is hardcoded to
+# a single instance.
+
+- name: Create the secretweb system user for this environment
+  ansible.builtin.user:
+    name: "{{ secretweb_user }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Ensure the install directory exists
+  ansible.builtin.file:
+    path: "{{ secretweb_install_dir }}"
+    state: directory
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0750"
+
+- name: Copy the application files
+  ansible.builtin.copy:
+    src: "{{ secretweb_repo_src }}/{{ item }}"
+    dest: "{{ secretweb_install_dir }}/{{ item }}"
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0640"
+  loop: "{{ secretweb_app_files }}"
+
+- name: Ensure the data directory exists
+  ansible.builtin.file:
+    path: "{{ secretweb_install_dir }}/data"
+    state: directory
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0750"
+
+- name: Create this install's own venv and install dependencies into it
+  ansible.builtin.pip:
+    requirements: "{{ secretweb_install_dir }}/requirements.txt"
+    virtualenv: "{{ secretweb_install_dir }}/venv"
+    virtualenv_command: "{{ secretweb_python }} -m venv"
+  become: true
+  become_user: "{{ secretweb_user }}"
+
+- name: Template config.ini (first deploy only)
+  ansible.builtin.template:
+    src: config.ini.j2
+    dest: "{{ secretweb_install_dir }}/data/config.ini"
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0640"
+    force: false  # never overwrite a live, already-bootstrapped config.ini
+                  # (setup_secretweb.py flips initiated=True in it later -
+                  # re-templating would silently revert that)

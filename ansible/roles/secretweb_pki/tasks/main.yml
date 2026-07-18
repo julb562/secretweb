@@ -1,0 +1,132 @@
+---
+# Per-environment CA (generated once, kept controller-side under
+# secretweb_ca_dir - never copied to a mesh host) plus a per-host leaf
+# identity signed by it. Test and production use entirely distinct CAs
+# (different secretweb_ca_name per environment - see site.yml),
+# so a test host's certificate can never verify against production's
+# ca.crt or vice versa.
+#
+# run_once + delegate_to: localhost on the CA-generation tasks below means
+# each environment's CA is generated exactly once across the whole
+# inventory (the first host to reach that environment's iteration creates
+# it; every other host, reaching the same iteration, finds it already
+# there and skips it) - not once per host. This role itself still runs
+# once per (environment, host) pair - see provision_environment.yml.
+#
+# Every delegate_to: localhost task below also sets become: false -
+# secretweb_ca_dir is a plain user-owned directory in the operator's own
+# checkout (see group_vars/all.yml), not something on the controller that
+# needs root. Without the override, these tasks would otherwise inherit
+# this play's become: true (meant for the *managed* hosts) and try to sudo
+# on the controller itself - which either prompts for a second, unrelated
+# password or times out waiting for one, depending on the controller's own
+# sudo setup.
+
+- name: Ensure the controller-local CA working directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ secretweb_ca_dir }}"
+    - "{{ secretweb_ca_dir }}/csrs"
+    - "{{ secretweb_ca_dir }}/signed"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Generate the environment CA private key (once)
+  community.crypto.openssl_privatekey:
+    path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
+    type: RSA
+    size: 4096
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Generate the environment CA's self-signing CSR (once)
+  community.crypto.openssl_csr:
+    path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.csr"
+    privatekey_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
+    common_name: "{{ secretweb_ca_name }}"
+    basic_constraints:
+      - "CA:TRUE"
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Self-sign the environment CA certificate (once)
+  community.crypto.x509_certificate:
+    path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.crt"
+    csr_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.csr"
+    privatekey_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ secretweb_ca_days }}d"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Ensure the host's certificates directory exists
+  ansible.builtin.file:
+    path: "{{ secretweb_install_dir }}/certificates"
+    state: directory
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0700"
+
+- name: Generate this host's leaf private key
+  community.crypto.openssl_privatekey:
+    path: "{{ secretweb_install_dir }}/certificates/private.pem"
+    type: RSA
+    size: 2048
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0600"
+
+- name: Generate this host's leaf CSR
+  community.crypto.openssl_csr:
+    path: "{{ secretweb_install_dir }}/certificates/{{ secretweb_env }}.csr"
+    privatekey_path: "{{ secretweb_install_dir }}/certificates/private.pem"
+    common_name: "{{ secretweb_cert_cn }}"
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0600"
+
+- name: Fetch this host's CSR back to the controller for signing
+  ansible.builtin.fetch:
+    src: "{{ secretweb_install_dir }}/certificates/{{ secretweb_env }}.csr"
+    dest: "{{ secretweb_ca_dir }}/csrs/{{ inventory_hostname }}-{{ secretweb_env }}.csr"
+    flat: true
+
+- name: Sign this host's leaf certificate with the environment CA
+  community.crypto.x509_certificate:
+    path: "{{ secretweb_ca_dir }}/signed/{{ inventory_hostname }}-{{ secretweb_env }}.crt"
+    csr_path: "{{ secretweb_ca_dir }}/csrs/{{ inventory_hostname }}-{{ secretweb_env }}.csr"
+    provider: ownca
+    ownca_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.crt"
+    ownca_privatekey_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
+    ownca_not_after: "+{{ secretweb_cert_days }}d"
+  delegate_to: localhost
+  become: false
+
+- name: Copy the signed certificate to the host
+  ansible.builtin.copy:
+    src: "{{ secretweb_ca_dir }}/signed/{{ inventory_hostname }}-{{ secretweb_env }}.crt"
+    dest: "{{ secretweb_install_dir }}/certificates/cert.pem"
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0600"
+
+- name: Copy the environment's CA certificate to the host
+  ansible.builtin.copy:
+    src: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.crt"
+    dest: "{{ secretweb_install_dir }}/certificates/ca.crt"
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0644"

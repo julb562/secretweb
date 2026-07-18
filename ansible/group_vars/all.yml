@@ -1,0 +1,47 @@
+---
+# Shared defaults for every secretweb host, regardless of environment
+# (prod/test) - environment-specific values (install dir, port, unit name,
+# CA, ...) are set per-environment in site.yml instead.
+#
+# site.yml/provision_environment.yml/roles/ all live directly in this
+# ansible/ directory (not nested under a playbooks/ subdirectory)
+# deliberately - Ansible resolves both role lookups (import_role/
+# include_role) and group_vars/host_vars discovery relative to the
+# directory of the file doing the including / the top-level playbook,
+# not the caller's cwd. Nesting site.yml one level deeper than roles/
+# breaks both of those silently (roles "not found" for static imports;
+# group_vars never loaded at all) - keeping everything flat and adjacent
+# is what the paths below (and Ansible's own documented layout) assume.
+
+# Where ansible copies the application tree from - defaults to this
+# ansible/ directory's parent (the repo root), so running ansible-playbook
+# from a checkout deploys that same checkout.
+secretweb_repo_src: "{{ playbook_dir }}/.."
+
+# Interpreter used to create each install's own venv.
+secretweb_python: python3
+
+# Files making up the application tree - deliberately a whitelist (not
+# "copy everything") so ansible never ships tests/, venv/, ansible/ itself,
+# or dev tooling to a target host, and never touches an install's already
+# provisioned data/ or certificates/ by accident.
+secretweb_app_files:
+  - server.py
+  - initiator.py
+  - setup_secretweb.py
+  - peer_client.py
+  - shamir.py
+  - cryptofile.py
+  - key_handoff.py
+  - timeutils.py
+  - requirements.txt
+
+# Controller-local directory each environment's CA key/cert is generated
+# into and kept - never copied to a mesh host. See roles/secretweb_pki.
+# Gitignored (see .gitignore) since it holds private key material.
+secretweb_ca_dir: "{{ playbook_dir }}/.secretweb_ca"
+
+# Not every host runs OpenVPN in the same role (or at all) - default to
+# neither; override per-host in inventory/hosts.yml.
+secretweb_wants_openvpn_server: false
+secretweb_wants_openvpn_client: false

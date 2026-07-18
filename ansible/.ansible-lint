@@ -1,0 +1,10 @@
+---
+# var-naming[no-role-prefix] wants every role variable prefixed with its
+# own role's name (e.g. secretweb_app_install_dir). Deliberately not
+# followed here: secretweb_app/secretweb_pki/secretweb_service all
+# describe the *same* environment (see playbooks/provision_environment.yml)
+# and intentionally share one flat secretweb_* variable namespace across
+# all three, so e.g. secretweb_install_dir means the same thing everywhere
+# instead of being redefined three times under three different prefixes.
+skip_list:
+  - var-naming[no-role-prefix]

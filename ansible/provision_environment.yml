@@ -1,0 +1,45 @@
+---
+# Imported once per environment (see site.yml), with secretweb_env_vars
+# set to that environment's vars. Runs all three roles - app, PKI, then
+# service - for one environment, in the order each depends on the last
+# (app creates the user/install dir the others write into; PKI needs the
+# app's certificates/ dir; service needs the app files + certs both in
+# place before it can point ExecStart at them).
+#
+# import_role (static), not include_role (dynamic) - deliberately: tags
+# applied to the import_tasks call in site.yml only propagate down into
+# these roles' own tasks for --tags/--skip-tags filtering if the include is
+# static. With include_role/include_tasks, a task tagged e.g. `test` at the
+# call site still only gates whether the *include statement itself* runs -
+# every task inside stays untagged and gets silently filtered out by
+# --tags, which is exactly the "ok=2, nothing actually happened" symptom
+# this was hit by initially.
+
+- name: "Provision application tree for environment: {{ secretweb_env_vars.env }}"
+  ansible.builtin.import_role:
+    name: secretweb_app
+  vars:
+    secretweb_env: "{{ secretweb_env_vars.env }}"
+    secretweb_install_dir: "{{ secretweb_env_vars.install_dir }}"
+    secretweb_port: "{{ secretweb_env_vars.port }}"
+    secretweb_user: "{{ secretweb_env_vars.user }}"
+
+- name: "Provision PKI for environment: {{ secretweb_env_vars.env }}"
+  ansible.builtin.import_role:
+    name: secretweb_pki
+  vars:
+    secretweb_env: "{{ secretweb_env_vars.env }}"
+    secretweb_install_dir: "{{ secretweb_env_vars.install_dir }}"
+    secretweb_user: "{{ secretweb_env_vars.user }}"
+    secretweb_ca_name: "{{ secretweb_env_vars.ca_name }}"
+    secretweb_cert_cn: "{{ secretweb_env_vars.cert_cn }}"
+
+- name: "Provision systemd unit for environment: {{ secretweb_env_vars.env }}"
+  ansible.builtin.import_role:
+    name: secretweb_service
+  vars:
+    secretweb_env: "{{ secretweb_env_vars.env }}"
+    secretweb_install_dir: "{{ secretweb_env_vars.install_dir }}"
+    secretweb_user: "{{ secretweb_env_vars.user }}"
+    secretweb_unit_name: "{{ secretweb_env_vars.unit_name }}"
+    secretweb_symlink_client: "{{ secretweb_env_vars.symlink_client }}"

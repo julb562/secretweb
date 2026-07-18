@@ -1,0 +1,58 @@
+---
+# Installs and enables (but does not start) the systemd unit for one
+# environment, plus - production only - the /usr/local/bin symlink.
+#
+# Deliberately no "remove the symlink if secretweb_symlink_client is false"
+# task: this role runs once per environment on the same host (prod, then
+# test - see site.yml), and since /usr/local/bin/secretweb-client
+# is a single, environment-agnostic path, an unconditional removal in the
+# test iteration would delete the symlink the prod iteration just created
+# moments earlier in the same run. Skipping creation (via the `when`
+# guards below) is enough to keep test symlink-free without touching
+# anything prod already put there.
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: secretweb.service.j2
+    dest: "/etc/systemd/system/{{ secretweb_unit_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Flush handlers so the unit file is reloaded before enabling it
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the systemd unit
+  ansible.builtin.systemd:
+    name: "{{ secretweb_unit_name }}.service"
+    enabled: true
+  # Not started here - first start still depends on setup_secretweb.py's
+  # manual, interactive first-run bootstrap (host list, KEY1, data files)
+  # having already been run at least once against this install dir.
+
+- name: Ensure the install dir's bin/ directory exists
+  ansible.builtin.file:
+    path: "{{ secretweb_install_dir }}/bin"
+    state: directory
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0755"
+  when: secretweb_symlink_client
+
+- name: Install the secretweb-client wrapper
+  ansible.builtin.template:
+    src: secretweb-client.sh.j2
+    dest: "{{ secretweb_install_dir }}/bin/secretweb-client"
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0755"
+  when: secretweb_symlink_client
+
+- name: Symlink secretweb-client into /usr/local/bin
+  ansible.builtin.file:
+    src: "{{ secretweb_install_dir }}/bin/secretweb-client"
+    dest: /usr/local/bin/secretweb-client
+    state: link
+    force: true
+  when: secretweb_symlink_client

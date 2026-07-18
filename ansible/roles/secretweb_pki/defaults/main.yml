@@ -1,0 +1,5 @@
+---
+secretweb_ca_name: secretweb-network-ca
+secretweb_cert_cn: "{{ inventory_hostname }}"
+secretweb_ca_days: 3650
+secretweb_cert_days: 3650
