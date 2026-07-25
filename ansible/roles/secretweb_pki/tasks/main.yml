@@ -21,6 +21,13 @@
 # on the controller itself - which either prompts for a second, unrelated
 # password or times out waiting for one, depending on the controller's own
 # sudo setup.
+#
+# The CA private key is passphrase-encrypted (secretweb_ca_passphrase,
+# from the vault-encrypted group_vars/all/vault.yml - see
+# vault.yml.example) - not just filesystem-permission-protected. That
+# passphrase is needed again every time this role runs, not only when the
+# CA is first created: signing each new host's leaf certificate further
+# down means reading the CA key, encrypted or not.
 
 - name: Ensure the controller-local CA working directories exist
   ansible.builtin.file:
@@ -40,6 +47,8 @@
     path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
     type: RSA
     size: 4096
+    passphrase: "{{ secretweb_ca_passphrase }}"
+    cipher: auto
     mode: "0600"
   delegate_to: localhost
   become: false
@@ -49,6 +58,7 @@
   community.crypto.openssl_csr:
     path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.csr"
     privatekey_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
+    privatekey_passphrase: "{{ secretweb_ca_passphrase }}"
     common_name: "{{ secretweb_ca_name }}"
     basic_constraints:
       - "CA:TRUE"
@@ -66,6 +76,7 @@
     path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.crt"
     csr_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.csr"
     privatekey_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
+    privatekey_passphrase: "{{ secretweb_ca_passphrase }}"
     provider: selfsigned
     selfsigned_not_after: "+{{ secretweb_ca_days }}d"
   delegate_to: localhost
@@ -111,6 +122,7 @@
     provider: ownca
     ownca_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.crt"
     ownca_privatekey_path: "{{ secretweb_ca_dir }}/{{ secretweb_ca_name }}.key"
+    ownca_privatekey_passphrase: "{{ secretweb_ca_passphrase }}"
     ownca_not_after: "+{{ secretweb_cert_days }}d"
   delegate_to: localhost
   become: false

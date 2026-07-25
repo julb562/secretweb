@@ -1,0 +1,38 @@
+# This is a plain example/template, NOT a real vault file - it is meant
+# to be read, not decrypted (there's nothing encrypted about it). Create
+# the real group_vars/all/vault.yml alongside it by running, once per
+# environment, from this ansible/ directory:
+#
+#   ansible-vault encrypt_string --ask-vault-pass \
+#     --name 'secretweb_ca_passphrase_prod' \
+#     "$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+#
+#   ansible-vault encrypt_string --ask-vault-pass \
+#     --name 'secretweb_ca_passphrase_test' \
+#     "$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+#
+# Pick a vault password when prompted (you'll need it again on every
+# future run that touches PKI - see roles/secretweb_pki/tasks/main.yml).
+# Use a DIFFERENT random passphrase for each environment (two separate
+# `python3 -c ...` invocations above, not the same value pasted twice) -
+# they encrypt two entirely separate CAs, so there's no reason for a
+# prod passphrase leak to also expose the test CA's key or vice versa.
+#
+# Paste each command's full output (the "secretweb_ca_passphrase_prod: !vault
+# |\n          $ANSIBLE_VAULT;1.1;AES256\n..." block) into
+# group_vars/all/vault.yml - that whole file is then safe to commit; only
+# the vault password itself (which you typed above, and which lives
+# nowhere in this repo) can decrypt it.
+#
+# Real group_vars/all/vault.yml ends up looking like this (illustrative
+# values only - do not use these):
+#
+# secretweb_ca_passphrase_prod: !vault |
+#           $ANSIBLE_VAULT;1.1;AES256
+#           66386134653765386231653966386231653966386231653966386231653966
+#           38623165396638623165396638623165396638623165396638623165396638
+#           ...
+# secretweb_ca_passphrase_test: !vault |
+#           $ANSIBLE_VAULT;1.1;AES256
+#           37653834663738653834663738653834663738653834663738653834663738
+#           ...

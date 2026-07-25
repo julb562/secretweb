@@ -10,10 +10,14 @@
 # Select just one with --tags prod or --tags test (e.g. to deploy/update
 # only the test instance): `ansible-playbook site.yml -i inventory/hosts.yml
 # --tags test` (run from within this ansible/ directory). Two explicit
-# tasks below (not a loop
-# over a list) is what makes that possible - tags apply per task, not per
-# loop iteration, so a single looped task couldn't be filtered down to one
-# environment.
+# tasks below (not a loop over a list) is what makes that possible - tags
+# apply per task, not per loop iteration, so a single looped task couldn't
+# be filtered down to one environment.
+#
+# Needs --ask-vault-pass (or -e @a-vault-password-file) on every run: each
+# environment's CA private key is passphrase-encrypted, and that
+# passphrase lives in the vault-encrypted group_vars/all/vault.yml, not
+# in this file - see group_vars/all/vault.yml.example for how to create it.
 - name: Deploy secretweb (production + test)
   hosts: secretweb_hosts
   become: true
@@ -25,6 +29,7 @@
       unit_name: secretweb
       user: secretweb
       ca_name: secretweb-network-ca
+      ca_passphrase: "{{ secretweb_ca_passphrase_prod }}"
       cert_cn: "{{ inventory_hostname }}"
       symlink_client: true
     secretweb_test_vars:
@@ -34,6 +39,7 @@
       unit_name: secretweb-test
       user: secretweb-test
       ca_name: secretweb-network-test-ca
+      ca_passphrase: "{{ secretweb_ca_passphrase_test }}"
       cert_cn: "{{ inventory_hostname }}-test"
       symlink_client: false
   tasks:

@@ -32,6 +32,7 @@
     secretweb_install_dir: "{{ secretweb_env_vars.install_dir }}"
     secretweb_user: "{{ secretweb_env_vars.user }}"
     secretweb_ca_name: "{{ secretweb_env_vars.ca_name }}"
+    secretweb_ca_passphrase: "{{ secretweb_env_vars.ca_passphrase }}"
     secretweb_cert_cn: "{{ secretweb_env_vars.cert_cn }}"
 
 - name: "Provision systemd unit for environment: {{ secretweb_env_vars.env }}"

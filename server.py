@@ -13,6 +13,8 @@ matches the connecting client certificate's identity (see
 _require_owner_matches_client_cert()), since simply being a trusted host
 isn't enough to store or retrieve another host's share.
 """
+from __future__ import annotations
+
 import configparser
 import contextlib
 import os

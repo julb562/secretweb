@@ -3,6 +3,12 @@
 # (prod/test) - environment-specific values (install dir, port, unit name,
 # CA, ...) are set per-environment in site.yml instead.
 #
+# This file is one of two group_vars for the "all" group - its sibling,
+# vault.yml, is ansible-vault-encrypted and holds the per-environment CA
+# private key passphrases (secretweb_ca_passphrase_prod/_test). Ansible
+# merges both automatically; see vault.yml.example for how to create the
+# real vault.yml.
+#
 # site.yml/provision_environment.yml/roles/ all live directly in this
 # ansible/ directory (not nested under a playbooks/ subdirectory)
 # deliberately - Ansible resolves both role lookups (import_role/

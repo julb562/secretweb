@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+data/
+ansible/inventory/
+ansible/.secretweb_ca/
+ansible/group_vars/all/vault.yml
+certificates/
+mynotes
