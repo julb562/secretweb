@@ -1,4 +1,5 @@
 import os
+import socket
 
 import pytest
 
@@ -65,3 +66,18 @@ def test_retrieve_of_share_owned_by_someone_else_raises_peer_request_error(spawn
 
     with pytest.raises(peer_client.PeerRequestError):
         _retrieve(port, share["uuid"], OTHER_CLIENT_CERT, OTHER_CLIENT_KEY)
+
+
+def test_is_reachable_true_for_running_server(spawned_server):
+    assert peer_client.is_reachable(
+        "127.0.0.1", spawned_server, GOOD_CLIENT_CERT, GOOD_CLIENT_KEY, CA_FILE,
+    ) is True
+
+
+def test_is_reachable_false_for_wrong_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        free_port = s.getsockname()[1]
+    assert peer_client.is_reachable(
+        "127.0.0.1", free_port, GOOD_CLIENT_CERT, GOOD_CLIENT_KEY, CA_FILE, timeout=1.0,
+    ) is False

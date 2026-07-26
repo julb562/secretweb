@@ -1,16 +1,22 @@
 """
-First draft of the boot-time initiator.
+Boot-time initiator: on an already-bootstrapped host (config.ini's
+`initiated` is true - set by setup_secretweb.py's one-time interactive
+bootstrap), reconstructs this host's own KEY1 from peer shares (see
+_collect_key1()), matching the boot algorithm in mynotes/Initials.txt -
+look up own key1's name/uuid/treshold, ask trusted peers for shares in
+random order until treshold is met, decrypt - then spawns server.py and
+hands it KEY1 over a socketpair, per key_handoff.py. Not yet initiated
+means there's nothing to reconstruct or start yet: setup_secretweb.py
+starts the server itself, directly, during that first bootstrap.
 
-Real responsibilities not implemented yet: host list lookup and share
-collection from peer hosts to reconstruct KEY1 (a hardcoded placeholder is
-used instead). What is implemented: spawning server.py as an independent
-child process and handing it KEY1 over a socketpair, per key_handoff.py -
-plus tracking the spawned server's pid so a later `--stop` (e.g. from a
+Also tracks the spawned server's pid so a later `--stop` (e.g. from a
 systemd ExecStop, since server.py can't be a normal supervised service -
 see start_server()'s docstring) has something to stop.
 """
 import configparser
+import json
 import os
+import random
 import signal
 import socket
 import subprocess
@@ -21,16 +27,25 @@ import click
 
 import cryptofile
 import key_handoff
+import peer_client
+import server
+import shamir
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_BASEDIR = SCRIPT_DIR
 SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.py")
 
 PID_FILENAME = "server.pid"
+POLL_INTERVAL_SECONDS = 10
 
-# Placeholder until real share collection from peer hosts is implemented -
-# KEY1 is normally machine-generated per host at network-join time.
-HARDCODED_KEY1 = "placeholder-key1-0123456789abcdef"
+_UNTRUSTED_STATUSES = {"compromised", "deleted", "disappeared"}
+
+
+class Key1ReconstructionError(Exception):
+    """Something structurally wrong (e.g. key1 metadata missing from
+    config.ini, or no trusted peers in hosts.json) that no amount of
+    retrying peers would fix - distinct from shamir.ShareReconstructionError,
+    which means enough shares were collected but they don't validate."""
 
 
 def load_config(config_file: str) -> configparser.ConfigParser:
@@ -38,6 +53,96 @@ def load_config(config_file: str) -> configparser.ConfigParser:
     config = configparser.ConfigParser()
     config.read(config_file)
     return config
+
+
+def _cert_paths(basedir: str, config: configparser.ConfigParser) -> tuple:
+    cert_dir = os.path.join(basedir, "certificates")
+    cert_file = os.path.join(cert_dir, config.get("secretweb", "cert-file", fallback="cert.pem"))
+    key_file = os.path.join(cert_dir, config.get("secretweb", "key-file", fallback="private.pem"))
+    ca_file = os.path.join(cert_dir, config.get("secretweb", "ca-file", fallback="ca.crt"))
+    return cert_file, key_file, ca_file
+
+
+def _load_hosts_json(basedir: str) -> dict:
+    """Plain JSON read of the plaintext hosts.json mirror - no KEY1
+    needed to read it, which is exactly why server.ensure_hosts_file()
+    maintains that mirror in the first place."""
+    path = os.path.join(basedir, "data", server.HOSTS_PLAINTEXT_FILENAME)
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _own_host_entry(hosts_data: dict) -> dict:
+    for name, record in hosts_data.get("hosts", {}).items():
+        if record.get("status") == "local":
+            return {"name": name, **record}
+    raise Key1ReconstructionError(
+        "no host in hosts.json has status 'local' - can't determine this host's own identity"
+    )
+
+
+def _trusted_peers(hosts_data: dict, own_name: str) -> list:
+    peers = []
+    for name, record in hosts_data.get("hosts", {}).items():
+        if name == own_name or record.get("status") in _UNTRUSTED_STATUSES:
+            continue
+        peers.append({"name": name, **record})
+    return peers
+
+
+def _collect_key1(basedir: str, config: configparser.ConfigParser) -> str:
+    """Reconstructs this host's own KEY1 from peer shares. No bounded
+    number of retry rounds - same reasoning as
+    setup_secretweb.py._poll_for_hosts_online(): this can take as long as
+    the network takes to come back up, and `systemctl stop` is the
+    operator's way to abort if needed, not an arbitrary timeout here."""
+    section = config["secretweb"]
+    try:
+        key1_name = section["key1-name"]
+        key1_uuid = section["key1-uuid"]
+        key1_treshold = section.getint("key1-treshold")
+        key1_shares = section.getint("key1-shares")
+    except KeyError as exc:
+        raise Key1ReconstructionError(
+            f"config.ini is missing key1 metadata ({exc}) - this host hasn't "
+            "had key1 published to it yet (see setup_secretweb.py)"
+        ) from exc
+
+    hosts_data = _load_hosts_json(basedir)
+    own_host = _own_host_entry(hosts_data)
+    peers = _trusted_peers(hosts_data, own_host["name"])
+    if not peers:
+        raise Key1ReconstructionError("no trusted peers in hosts.json to ask for key1 shares")
+
+    cert_file, key_file, ca_file = _cert_paths(basedir, config)
+    port = config.getint("secretweb", "server-port")
+
+    decoder = shamir.ShamirSecret(
+        key1_name, own_host["name"], shares=key1_shares, treshold=key1_treshold,
+    )
+
+    contributed = set()
+    while not decoder.ready_to_decode:
+        candidates = [p for p in peers if p["name"] not in contributed]
+        random.shuffle(candidates)
+        for peer in candidates:
+            if decoder.ready_to_decode:
+                break
+            try:
+                participant_data = peer_client.retrieve_share(
+                    peer["address"], port, cert_file, key_file, ca_file, key1_uuid,
+                )
+            except (OSError, peer_client.ShareNotFoundError, peer_client.PeerRequestError):
+                continue
+            try:
+                decoder.populate_decoder(participant_data)
+            except shamir.InvalidShareError:
+                continue
+            contributed.add(peer["name"])
+        if not decoder.ready_to_decode:
+            time.sleep(POLL_INTERVAL_SECONDS)
+
+    return decoder.decode()
 
 
 def _pid_file_path(basedir: str) -> str:
@@ -144,9 +249,13 @@ def stop_server(basedir: str, timeout: float = 5.0) -> bool:
     help="Stop a previously started server using its pidfile, instead of starting one.",
 )
 def main(basedir: str, config_file: str, stop: bool) -> None:
-    """Checks initiation status, then spawns server.py and hands it KEY1.
-    With --stop, stops a previously started server instead (see
-    stop_server()) - this is what a systemd ExecStop calls."""
+    """Checks initiation status: if not yet initiated (setup_secretweb.py
+    hasn't bootstrapped this host), there's nothing to reconstruct or
+    start, so this is a no-op. If initiated, this is a normal (or
+    systemd) boot: reconstruct KEY1 from peer shares (see
+    _collect_key1()) and start the server for real. With --stop, stops a
+    previously started server instead (see stop_server()) - this is what
+    a systemd ExecStop calls."""
     if stop:
         if stop_server(basedir):
             click.echo("status: OK - server stopped")
@@ -160,11 +269,15 @@ def main(basedir: str, config_file: str, stop: bool) -> None:
     config = load_config(config_file)
     initiated = config.getboolean("secretweb", "initiated", fallback=False)
 
-    if initiated:
-        click.echo("status: already initiated - nothing to do")
+    if not initiated:
+        click.echo("status: not yet initiated - nothing to do (run setup_secretweb.py first)")
         return
 
-    key1 = HARDCODED_KEY1
+    try:
+        key1 = _collect_key1(basedir, config)
+    except (Key1ReconstructionError, shamir.ShareReconstructionError) as exc:
+        click.echo(f"status: FAILED to reconstruct key1: {exc}")
+        sys.exit(1)
 
     try:
         start_server(basedir, config_file, key1)
@@ -172,7 +285,7 @@ def main(basedir: str, config_file: str, stop: bool) -> None:
         click.echo(f"status: FAILED to start server: {exc}")
         sys.exit(1)
 
-    click.echo("status: OK - server started, KEY1 handed off, port bound")
+    click.echo("status: OK - key1 reconstructed, server started, port bound")
 
 
 if __name__ == "__main__":

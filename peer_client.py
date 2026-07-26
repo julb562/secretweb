@@ -34,6 +34,27 @@ def _connect(
     return http.client.HTTPSConnection(address, port, context=ctx, timeout=timeout)
 
 
+def is_reachable(
+    address: str, port: int, cert_file: str, key_file: str, ca_file: str, timeout: float = 3.0,
+) -> bool:
+    """Whether a peer's mTLS server answers - a GET to server.py's index
+    route, which only replies once the TLS handshake (and thus this
+    client's certificate) has verified. Connection/SSL/timeout failures
+    mean "not reachable", not an error - that's exactly what's being
+    asked here."""
+    try:
+        conn = _connect(address, port, cert_file, key_file, ca_file, timeout)
+        try:
+            conn.request("GET", "/")
+            resp = conn.getresponse()
+            resp.read()
+            return resp.status == 200
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException):
+        return False
+
+
 def store_share(
     address: str,
     port: int,

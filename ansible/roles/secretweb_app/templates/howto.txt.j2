@@ -1,0 +1,79 @@
+secretweb ({{ secretweb_env }}) - quick reference
+==================================================
+
+This install:   {{ secretweb_install_dir }}
+Service user:   {{ secretweb_user }}
+systemd unit:   {{ secretweb_unit_name }}
+mTLS port:      {{ secretweb_port }}
+
+First-time setup (once per host)
+---------------------------------
+
+Run this on every host in the network - the SAME full host list gets
+entered on every one, in separate/mirrored terminal sessions. Don't try
+to special-case "this host" - it's detected automatically from this
+host's own certificate.
+
+    sudo -u {{ secretweb_user }} {{ secretweb_install_dir }}/venv/bin/python3 {{ secretweb_install_dir }}/setup_secretweb.py
+
+({{ secretweb_user }}'s shell is /usr/sbin/nologin, so `su - {{ secretweb_user }}`
+or `sudo -u {{ secretweb_user }} -i` won't work - the command above runs the
+script directly instead, unaffected by that.)
+
+It will, in order: collect the host list; generate KEY1 and write the
+encrypted data files; start a temporary server; wait for every other host
+to come online; Shamir-split KEY1 and publish one share to each other
+host; then ask you to confirm every OTHER host is either still safely at
+this same point or already fully switched to systemd, stop the temporary
+server, and tell you to run:
+
+    sudo systemctl start {{ secretweb_unit_name }}
+    sudo systemctl status {{ secretweb_unit_name }}
+
+Do this ONE HOST AT A TIME - move to the next host only once this one's
+systemd service is confirmed running.
+
+Using the client (store/retrieve a share against a peer)
+----------------------------------------------------------
+
+certificates/private.pem is only readable by {{ secretweb_user }}
+(mode 600), so run the client as that user either way:
+
+{% if secretweb_symlink_client %}
+    sudo -u {{ secretweb_user }} secretweb-client store-share --host <peer-address> --port {{ secretweb_port }} \
+        --data-file share.json \
+        --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
+        --key-file {{ secretweb_install_dir }}/certificates/private.pem \
+        --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
+
+    sudo -u {{ secretweb_user }} secretweb-client get-share --host <peer-address> --port {{ secretweb_port }} \
+        --uuid <share-uuid> \
+        --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
+        --key-file {{ secretweb_install_dir }}/certificates/private.pem \
+        --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
+{% else %}
+No /usr/local/bin symlink in this environment - call peer_client.py directly:
+
+    sudo -u {{ secretweb_user }} {{ secretweb_install_dir }}/venv/bin/python3 {{ secretweb_install_dir }}/peer_client.py store-share \
+        --host <peer-address> --port {{ secretweb_port }} \
+        --data-file share.json \
+        --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
+        --key-file {{ secretweb_install_dir }}/certificates/private.pem \
+        --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
+
+    sudo -u {{ secretweb_user }} {{ secretweb_install_dir }}/venv/bin/python3 {{ secretweb_install_dir }}/peer_client.py get-share \
+        --host <peer-address> --port {{ secretweb_port }} \
+        --uuid <share-uuid> \
+        --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
+        --key-file {{ secretweb_install_dir }}/certificates/private.pem \
+        --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
+{% endif %}
+
+Stopping / restarting
+-----------------------
+
+    sudo systemctl stop {{ secretweb_unit_name }}
+    sudo systemctl restart {{ secretweb_unit_name }}
+
+(this calls `initiator.py --stop` under the hood - see ExecStop in the
+unit file at /etc/systemd/system/{{ secretweb_unit_name }}.service.)

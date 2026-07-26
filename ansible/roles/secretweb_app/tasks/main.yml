@@ -55,3 +55,11 @@
     force: false  # never overwrite a live, already-bootstrapped config.ini
                   # (setup_secretweb.py flips initiated=True in it later -
                   # re-templating would silently revert that)
+
+- name: Template howto.txt (safe to overwrite every run - no stateful content)
+  ansible.builtin.template:
+    src: howto.txt.j2
+    dest: "{{ secretweb_install_dir }}/howto.txt"
+    owner: "{{ secretweb_user }}"
+    group: "{{ secretweb_user }}"
+    mode: "0644"

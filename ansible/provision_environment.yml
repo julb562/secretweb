@@ -23,6 +23,8 @@
     secretweb_install_dir: "{{ secretweb_env_vars.install_dir }}"
     secretweb_port: "{{ secretweb_env_vars.port }}"
     secretweb_user: "{{ secretweb_env_vars.user }}"
+    secretweb_unit_name: "{{ secretweb_env_vars.unit_name }}"
+    secretweb_symlink_client: "{{ secretweb_env_vars.symlink_client }}"
 
 - name: "Provision PKI for environment: {{ secretweb_env_vars.env }}"
   ansible.builtin.import_role:

@@ -3,3 +3,5 @@ secretweb_install_dir: /opt/secretweb
 secretweb_port: 59222
 secretweb_bind_address: "0.0.0.0"
 secretweb_user: secretweb
+secretweb_unit_name: secretweb
+secretweb_symlink_client: false

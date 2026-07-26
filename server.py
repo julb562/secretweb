@@ -68,9 +68,12 @@ def _client_common_name() -> str | None:
     return None
 
 
-def _hostname_from_common_name(common_name: str) -> str:
+def hostname_from_common_name(common_name: str) -> str:
     """A CN may be a bare hostname or a fully-qualified one - only the
-    leftmost/hostname label is ever compared against a share's owner."""
+    leftmost/hostname label is ever compared against a share's owner.
+    Public (not module-private) - setup_secretweb.py reuses this same
+    normalization to match this host's own certificate against its typed
+    name in the collected host list, see _match_own_host()."""
     return common_name.split(".", 1)[0]
 
 
@@ -81,7 +84,7 @@ def _require_owner_matches_client_cert(owner: str) -> None:
     common_name = _client_common_name()
     if common_name is None:
         bottle.abort(403, "no client certificate identity available")
-    if _hostname_from_common_name(common_name).lower() != owner.lower():
+    if hostname_from_common_name(common_name).lower() != owner.lower():
         bottle.abort(403, "owner does not match client certificate identity")
 
 
