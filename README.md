@@ -11,7 +11,7 @@ auto-unseal, with trustee hosts standing in for a centralized unsealer.
 ## Status
 
 Working, not production-hardened. The crypto core, storage format, boot
-flow, and one full secret-creation flow are built and tested; several
+flow, and both secret create/decrypt flows are built and tested; several
 pieces described in the original design notes (`mynotes/Initials.txt`)
 are still stubs or entirely unbuilt - see **Relationship to
 mynotes/Initials.txt** and the **Roadmap** below.
@@ -38,6 +38,11 @@ mynotes/Initials.txt** and the **Roadmap** below.
    same way in reverse: Shamir-split the secret, send one share to every
    trusted peer, and once enough of them confirm they've saved it, record
    it as one of this host's own secrets.
+5. Reading one back (`secretweb_client.py get-secret`) asks this host's
+   own local record for the uuid/treshold it needs, then asks trusted
+   peers for shares of that uuid until enough have answered to
+   reconstruct it - only the host that created a secret can ever get it
+   back, since peers enforce the same owner-vs-certificate check either way.
 
 ## Architecture
 
@@ -47,11 +52,11 @@ mynotes/Initials.txt** and the **Roadmap** below.
 | `cryptofile.py` | Encrypted-at-rest JSON documents (AES-256-GCM, HKDF-derived per-purpose subkeys, atomic writes) |
 | `key_handoff.py` | Wire protocol for handing `KEY1` from `initiator.py` to `server.py` over a socketpair, and reporting startup success/failure back |
 | `hosts_data.py` | Reads the plaintext `hosts.json` mirror - "who am I," "who do I trust" - usable before `KEY1` is available to decrypt anything else |
-| `server.py` | The long-running mTLS service: owns all encrypted data files, exposes `/shares/<uuid>` (store/retrieve a share handed to this host) and `/secrets/<name>` (record one of this host's own created secrets) |
+| `server.py` | The long-running mTLS service: owns all encrypted data files, exposes `/shares/<uuid>` (store/retrieve a share handed to this host) and `/secrets/<name>` (record/read back one of this host's own created secrets) |
 | `initiator.py` | Boot-time: reconstructs `KEY1` from peer shares, spawns `server.py`, hands it `KEY1`. Also `--stop`, for systemd |
 | `setup_secretweb.py` | One-time interactive bootstrap: collect the host list, generate `KEY1`, wait for peers, publish `KEY1` as shares, walk the operator through a manual, one-host-at-a-time handoff to the systemd-managed service |
 | `peer_client.py` | Low-level mTLS client library for calling another host's `/shares`/`/secrets` routes - the building block, not the day-to-day tool |
-| `secretweb_client.py` | The actual day-2 CLI: `store-secret` discovers trusted peers itself, Shamir-splits, publishes, and records - no manual host/cert bookkeeping |
+| `secretweb_client.py` | The actual day-2 CLI: `store-secret`/`get-secret` discover trusted peers themselves, Shamir-split/reconstruct, publish/collect, and record/look up - no manual host/cert bookkeeping |
 | `timeutils.py` | UTC-only timestamp convention used for every stored/compared timestamp |
 | `ansible/` | Deployment: parameterized roles installing production *and* test instances side by side on the same host(s), each with its own CA, systemd unit, and service user |
 
@@ -102,6 +107,16 @@ its own dedicated system user, with its own CA, port, and systemd unit -
 templates/howto.txt.j2` (deployed as `howto.txt` in each install) for the
 actual day-to-day operator commands.
 
+`ansible/restart.yml` is a separate, standalone playbook for restarting an
+already-running service after a deploy - deliberately kept out of
+`site.yml` rather than triggered automatically, so a restart is always an
+explicit operator decision. It only restarts a unit that was already
+active (never starts a stopped one), and runs `serial: 1` - one host at a
+time, in full - because a restart re-triggers `initiator.py`'s unbounded
+peer-share KEY1 reconstruction, and restarting multiple hosts
+simultaneously could leave them waiting on each other's shares.
+`--tags prod`/`--tags test` selects one environment, same as `site.yml`.
+
 ## Relationship to `mynotes/Initials.txt`
 
 The original design notes are still the right mental model for the
@@ -121,6 +136,13 @@ while building this:
 - Housekeeping ("periodical cleaning, checks and updates to host-infos...
   we'll design more thoroughly later") was always deferred in the notes;
   it's now the largest block of unbuilt work - see **Roadmap**.
+- The decrypt flow's flagged trust question - a compromised host could lie
+  about "the latest version of SECRET_NAME" - turned out to be resolved by
+  how ownership is already enforced, not something needing a separate
+  quorum mechanism: only the host that created a secret can ever ask for
+  it back (peers check the requester's certificate against the share's
+  owner), so the *only* party ever asked "what's current" is that same
+  host's own local record - never a peer that could lie about it.
 - Everything else - mTLS everywhere, single-shot client for key hygiene,
   threshold/shares derived from live trusted-host count, `key_handoff.py`'s
   socketpair handoff - was built as originally sketched.
@@ -129,15 +151,6 @@ while building this:
 
 Decide-as-we-build items, grouped; nothing here is scheduled, this is
 just organized for when we pick each one up.
-
-### Client
-- **`get-secret`** - the reverse of `store-secret`: ask trusted peers for
-  shares of an existing secret by name/uuid and reconstruct it. The
-  mirror image of a solved problem, but inherits a trust question already
-  flagged in the original notes: asking a single host "what's the latest
-  version of this name" lets a compromised host lie about it. Needs a
-  decision (quorum agreement on the version pointer, or accept the risk
-  given hosts are already trust-scored) before or as part of building it.
 
 ### Data model
 - **`hosts.json`: add a `last_seen` field** (if not already present under

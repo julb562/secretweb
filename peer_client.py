@@ -1,11 +1,12 @@
 """
 mTLS client for calling a host's server.py over the network - the share
 store/retrieve routes (see server.py's /shares/<uuid> routes) for talking
-to peers, plus record_secret() for telling a host's *own* local server
-about a secret it just created (see server.py's /secrets/<name> route).
-More peer-to-peer request types (e.g. host-list gossip) are expected to
-land here later. This is the low-level building block secretweb_client.py
-(the actual day-2 create-secret CLI) is built on top of - not the
+to peers, plus record_secret()/get_secret_metadata() for telling a host's
+*own* local server about a secret it just created, or reading that
+bookkeeping back (see server.py's /secrets/<name> route). More
+peer-to-peer request types (e.g. host-list gossip) are expected to land
+here later. This is the low-level building block secretweb_client.py (the
+actual day-2 create/decrypt-secret CLI) is built on top of - not the
 top-level tool itself, though its own store-share/get-share commands
 below are still useful directly for manual ops/debugging.
 """
@@ -22,6 +23,10 @@ class PeerRequestError(Exception):
 
 class ShareNotFoundError(Exception):
     """The peer has no share stored for the requested uuid."""
+
+
+class SecretNotFoundError(Exception):
+    """No secret is recorded under the requested name."""
 
 
 def _connect(
@@ -151,6 +156,31 @@ def record_secret(
         if resp.status not in (200, 201):
             raise PeerRequestError(
                 f"record_secret failed: {resp.status} {resp.reason}: "
+                f"{resp_body.decode('utf-8', 'replace')}"
+            )
+        return json.loads(resp_body)
+    finally:
+        conn.close()
+
+
+def get_secret_metadata(
+    address: str, port: int, cert_file: str, key_file: str, ca_file: str, name: str, timeout: float = 10.0,
+) -> dict:
+    """Fetches this host's own recorded metadata (uuid/treshold/
+    shares_saved/last_updated) for a secret it created - see
+    server.get_secret_metadata() - so secretweb_client.py's get-secret
+    knows what to ask peers for. Raises SecretNotFoundError if nothing is
+    recorded under that name."""
+    conn = _connect(address, port, cert_file, key_file, ca_file, timeout)
+    try:
+        conn.request("GET", f"/secrets/{name}")
+        resp = conn.getresponse()
+        resp_body = resp.read()
+        if resp.status == 404:
+            raise SecretNotFoundError(f"no secret recorded under name {name!r}")
+        if resp.status != 200:
+            raise PeerRequestError(
+                f"get_secret_metadata failed: {resp.status} {resp.reason}: "
                 f"{resp_body.decode('utf-8', 'replace')}"
             )
         return json.loads(resp_body)

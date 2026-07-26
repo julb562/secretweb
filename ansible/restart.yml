@@ -1,0 +1,61 @@
+---
+# Restarts an already-running secretweb systemd unit - a deliberate,
+# standalone operator action, not something site.yml triggers as a side
+# effect of deploying. Kept out of site.yml entirely so we never have to
+# reason about every possible "did this deploy change anything" scenario
+# there - if you want a restart, you run this playbook, on purpose.
+#
+# serial: 1 is load-bearing, not a style choice: a restart re-triggers
+# initiator.py's full KEY1 reconstruction from peer shares on the way back
+# up (see initiator.py._collect_key1()), and that reconstruction is
+# unbounded - it will retry indefinitely rather than give up (the same
+# "no bounded rounds, only Ctrl+C/systemctl stop" design used everywhere
+# else KEY1 is reconstructed). Restarting multiple hosts at once could
+# have them all waiting on each other's peer shares simultaneously.
+# serial: 1 guarantees this playbook is done with one host - including
+# waiting out that reconstruction - before it touches the next.
+#
+# A restart only happens if the unit was already active; a host that was
+# never bootstrapped (or is deliberately stopped) is left alone, not started.
+#
+# Select one environment with --tags prod / --tags test; both run if
+# neither tag is given. Narrow to specific hosts the same way as site.yml,
+# with --limit.
+#
+# Because of the unbounded reconstruction above, this can legitimately
+# block for a long time on a host whose peers are slow to answer - that's
+# expected, not a hang, but it's worth remembering before assuming a stuck
+# ansible run is broken.
+- name: Restart secretweb services, one host at a time
+  hosts: secretweb_hosts
+  become: true
+  serial: 1
+  vars:
+    secretweb_prod_unit: secretweb
+    secretweb_test_unit: secretweb-test
+  tasks:
+    - name: Check current status of the production service
+      ansible.builtin.systemd:
+        name: "{{ secretweb_prod_unit }}.service"
+      register: secretweb_prod_status
+      tags: [prod]
+
+    - name: Restart the production service (only if it was already running)
+      ansible.builtin.systemd:
+        name: "{{ secretweb_prod_unit }}.service"
+        state: restarted
+      when: secretweb_prod_status.status.ActiveState == "active"
+      tags: [prod]
+
+    - name: Check current status of the test service
+      ansible.builtin.systemd:
+        name: "{{ secretweb_test_unit }}.service"
+      register: secretweb_test_status
+      tags: [test]
+
+    - name: Restart the test service (only if it was already running)
+      ansible.builtin.systemd:
+        name: "{{ secretweb_test_unit }}.service"
+        state: restarted
+      when: secretweb_test_status.status.ActiveState == "active"
+      tags: [test]

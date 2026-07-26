@@ -13,8 +13,8 @@ matches the connecting client certificate's identity (see
 _require_owner_matches_client_cert()), since simply being a trusted host
 isn't enough to store or retrieve another host's share. /secrets/<name>
 reuses that same check against this server's own identity, so only this
-host's own local client (see secretweb_client.py) can ever record one of
-this host's own secrets.
+host's own local client (see secretweb_client.py) can ever record or
+read back one of this host's own secrets.
 """
 from __future__ import annotations
 
@@ -177,6 +177,26 @@ def store_secret_metadata(name):
     app.config["secrets"]["secrets"][name] = record
     _persist_secrets()
     bottle.response.status = 201
+    return record
+
+
+@app.route("/secrets/<name>", method="GET")
+def get_secret_metadata(name):
+    """Returns this host's own recorded metadata for a secret it created
+    (uuid/treshold/shares_saved/last_updated) - not the secret itself,
+    just enough for secretweb_client.py's get-secret to know what to ask
+    peers for. Same owner check as store_secret_metadata() - only this
+    host's own local client can ever read it. This is also what resolves
+    the "which host's version is current" trust question flagged in
+    mynotes/Initials.txt for the decrypt flow: there's only ever one
+    party this can be asked of (this host itself, via its own
+    certificate), never a peer that could lie about it."""
+    own_name = hosts_data.own_host_entry(app.config["hosts"])["name"]
+    _require_owner_matches_client_cert(own_name)
+
+    record = app.config["secrets"]["secrets"].get(name)
+    if record is None:
+        bottle.abort(404, "no secret recorded under this name")
     return record
 
 

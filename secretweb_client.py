@@ -1,20 +1,29 @@
 """
-Day-2 CLI for creating a new secret across the network - the actual
-end-user command described in mynotes/Initials.txt's "To create a new
-secret to the network" section (steps 2.5-7): discover trusted peers from
-hosts.json, Shamir-split the secret, send one share to each peer
-(peer_client.store_share()), and - once enough peers have accepted it -
-tell this host's own local server to record it as one of this host's own
-secrets (peer_client.record_secret()).
+Day-2 CLI for creating and reconstructing secrets across the network -
+the actual end-user commands described in mynotes/Initials.txt's "To
+create a new secret to the network" and "To de-encrypt a secret" sections.
 
-Decrypting an existing secret is a separate, not-yet-built flow (see
-mynotes/Initials.txt's "To de-encrypt a secret" section) - this only
-covers creation.
+store-secret: discover trusted peers from hosts.json, Shamir-split the
+secret, send one share to each peer (peer_client.store_share()), and -
+once enough peers have accepted it - tell this host's own local server to
+record it as one of this host's own secrets (peer_client.record_secret()).
+
+get-secret: ask this host's own local server what uuid/treshold it
+recorded for a name (peer_client.get_secret_metadata()), then ask trusted
+peers for shares of that uuid (peer_client.retrieve_share()) until enough
+have answered to reconstruct it. This is also what resolves the "which
+host's version of SECRET_NAME is current" trust question the original
+notes flagged for this flow: only this host's own local record is ever
+asked - never a peer, which could otherwise lie about it - because the
+same owner-vs-certificate check that lets only this host publish its own
+secrets also means only this host can ever read its own bookkeeping back
+(see server.get_secret_metadata()).
 """
 from __future__ import annotations
 
 import configparser
 import os
+import random
 import sys
 
 import click
@@ -166,6 +175,83 @@ def store_secret_cmd(
         f"OK - saved to {successes}/{shares} share(s) (treshold {treshold}) "
         f"at {record['last_updated']}. uuid {secret_obj.uuid}"
     )
+
+
+@cli.command("get-secret")
+@click.option("--name", required=True, help="Name of the secret to reconstruct.")
+@click.option(
+    "--basedir",
+    default=DEFAULT_BASEDIR,
+    show_default=True,
+    help="Project base directory (holds data/ and certificates/ subdirectories).",
+)
+@click.option(
+    "--config-file",
+    default=None,
+    help="Path to config.ini. Defaults to <basedir>/data/config.ini.",
+)
+def get_secret_cmd(name: str, basedir: str, config_file: str) -> None:
+    """Reconstructs a secret this host previously created, by asking
+    trusted peers for their shares of it. Only the host that originally
+    created a secret can ever get it back - the same owner-vs-certificate
+    check peers use for /shares means nobody else's request would even be
+    accepted. Progress goes to stderr; the reconstructed secret itself -
+    and only that - is printed to stdout, so this is pipeable
+    (`get-secret --name x > out` or `| some-other-tool`)."""
+    if config_file is None:
+        config_file = os.path.join(basedir, "data", "config.ini")
+    config = _load_config(config_file)
+    cert_file, key_file, ca_file = _cert_paths(basedir, config)
+    port = config.getint("secretweb", "server-port")
+
+    try:
+        own_record = peer_client.get_secret_metadata(
+            "127.0.0.1", port, cert_file, key_file, ca_file, name,
+        )
+    except (OSError, peer_client.PeerRequestError, peer_client.SecretNotFoundError) as exc:
+        raise click.ClickException(f"could not look up '{name}': {exc}")
+
+    hosts = hosts_data.load_hosts_json(basedir)
+    own_host = hosts_data.own_host_entry(hosts)
+    peers = hosts_data.trusted_peers(hosts, own_host["name"])
+    random.shuffle(peers)
+
+    decoder = shamir.ShamirSecret(
+        name, own_host["name"],
+        shares=own_record["shares_saved"], treshold=own_record["treshold"],
+    )
+
+    obtained = 0
+    for peer in peers:
+        if decoder.ready_to_decode:
+            break
+        try:
+            participant_data = peer_client.retrieve_share(
+                peer["address"], port, cert_file, key_file, ca_file, own_record["uuid"],
+            )
+        except (OSError, peer_client.ShareNotFoundError, peer_client.PeerRequestError) as exc:
+            click.echo(f"  {peer['name']}: unavailable ({exc})", err=True)
+            continue
+        try:
+            decoder.populate_decoder(participant_data)
+        except shamir.InvalidShareError as exc:
+            click.echo(f"  {peer['name']}: rejected ({exc})", err=True)
+            continue
+        click.echo(f"  {peer['name']}: OK", err=True)
+        obtained += 1
+
+    if not decoder.ready_to_decode:
+        raise click.ClickException(
+            f"only obtained {obtained} share(s), need {own_record['treshold']} - "
+            "not enough peers responded"
+        )
+
+    try:
+        secret_value = decoder.decode()
+    except shamir.ShareReconstructionError as exc:
+        raise click.ClickException(f"reconstruction failed: {exc}")
+
+    click.echo(secret_value)
 
 
 if __name__ == "__main__":

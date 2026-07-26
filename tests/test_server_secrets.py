@@ -204,3 +204,35 @@ def test_store_secret_metadata_rejects_malformed_body(server_as_good_client):
     )
 
     assert status == 400
+
+
+def test_get_secret_metadata_returns_a_previously_stored_record(server_as_good_client):
+    port = server_as_good_client
+    payload = json.dumps({"uuid": "abc-123", "treshold": 2, "shares_saved": 3}).encode("utf-8")
+    _https_request(port, "POST", "/secrets/my-secret", GOOD_CLIENT_CERT, GOOD_CLIENT_KEY, body=payload)
+
+    status, body = _https_request(port, "GET", "/secrets/my-secret", GOOD_CLIENT_CERT, GOOD_CLIENT_KEY)
+
+    assert status == 200
+    record = json.loads(body)
+    assert record["uuid"] == "abc-123"
+    assert record["treshold"] == 2
+    assert record["shares_saved"] == 3
+
+
+def test_get_secret_metadata_404s_for_unknown_name(server_as_good_client):
+    port = server_as_good_client
+
+    status, _ = _https_request(port, "GET", "/secrets/no-such-secret", GOOD_CLIENT_CERT, GOOD_CLIENT_KEY)
+
+    assert status == 404
+
+
+def test_get_secret_metadata_rejects_a_different_hosts_own_cert(server_as_good_client):
+    port = server_as_good_client
+    payload = json.dumps({"uuid": "abc-123", "treshold": 2, "shares_saved": 3}).encode("utf-8")
+    _https_request(port, "POST", "/secrets/my-secret", GOOD_CLIENT_CERT, GOOD_CLIENT_KEY, body=payload)
+
+    status, _ = _https_request(port, "GET", "/secrets/my-secret", OTHER_CLIENT_CERT, OTHER_CLIENT_KEY)
+
+    assert status == 403

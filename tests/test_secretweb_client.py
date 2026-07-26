@@ -198,6 +198,75 @@ def test_store_secret_reads_from_stdin_when_secret_option_omitted(network):
     assert result.exit_code == 0, result.output
 
 
+def _store_secret(network, name, secret):
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["store-secret", "--name", name, "--secret", secret, "--basedir", network["own_basedir"]],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_get_secret_reconstructs_a_previously_stored_secret(network):
+    _store_secret(network, "roundtrip-secret", "hunter2")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-secret", "--name", "roundtrip-secret", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code == 0, result.output
+    # stdout carries *only* the secret - progress goes to stderr - so this
+    # is meant to be pipeable without extra parsing.
+    assert result.stdout == "hunter2\n"
+
+
+def test_get_secret_succeeds_when_one_peer_is_down(network):
+    _store_secret(network, "roundtrip-secret", "hunter2")
+
+    down_peer = network["peers"][0]
+    down_peer.terminate()
+    down_peer.wait(timeout=3)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-secret", "--name", "roundtrip-secret", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "hunter2\n"
+
+
+def test_get_secret_fails_clearly_when_too_many_peers_are_down(network):
+    _store_secret(network, "roundtrip-secret", "hunter2")
+
+    for proc in network["peers"][:2]:
+        proc.terminate()
+        proc.wait(timeout=3)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-secret", "--name", "roundtrip-secret", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+
+
+def test_get_secret_fails_clearly_for_unknown_name(network):
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-secret", "--name", "never-created", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+
+
 def test_store_secret_rejects_shares_exceeding_trusted_peer_count(network):
     runner = CliRunner()
     result = runner.invoke(
