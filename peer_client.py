@@ -1,10 +1,13 @@
 """
-mTLS client for calling another host's server.py over the network -
-currently just the share store/retrieve routes (see server.py's
-/shares/<uuid> routes). More peer-to-peer request types (e.g. host-list
-gossip) are expected to land here later; this is not the day-2
-secret-creation/decryption CLI described in mynotes/Initials.txt, which
-still needs to be built on top of this.
+mTLS client for calling a host's server.py over the network - the share
+store/retrieve routes (see server.py's /shares/<uuid> routes) for talking
+to peers, plus record_secret() for telling a host's *own* local server
+about a secret it just created (see server.py's /secrets/<name> route).
+More peer-to-peer request types (e.g. host-list gossip) are expected to
+land here later. This is the low-level building block secretweb_client.py
+(the actual day-2 create-secret CLI) is built on top of - not the
+top-level tool itself, though its own store-share/get-share commands
+below are still useful directly for manual ops/debugging.
 """
 import http.client
 import json
@@ -109,6 +112,45 @@ def retrieve_share(
         if resp.status != 200:
             raise PeerRequestError(
                 f"retrieve_share failed: {resp.status} {resp.reason}: "
+                f"{resp_body.decode('utf-8', 'replace')}"
+            )
+        return json.loads(resp_body)
+    finally:
+        conn.close()
+
+
+def record_secret(
+    address: str,
+    port: int,
+    cert_file: str,
+    key_file: str,
+    ca_file: str,
+    name: str,
+    uuid: str,
+    treshold: int,
+    shares_saved: int,
+    timeout: float = 10.0,
+) -> dict:
+    """Tells a server (in practice always 127.0.0.1:<own port>, using this
+    host's own identity) to record one of its own secrets - see
+    server.store_secret_metadata(). Returns the stored record (including
+    the server-assigned last_updated timestamp)."""
+    body = json.dumps({
+        "uuid": uuid,
+        "treshold": treshold,
+        "shares_saved": shares_saved,
+    }).encode("utf-8")
+    conn = _connect(address, port, cert_file, key_file, ca_file, timeout)
+    try:
+        conn.request(
+            "POST", f"/secrets/{name}",
+            body=body, headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        resp_body = resp.read()
+        if resp.status not in (200, 201):
+            raise PeerRequestError(
+                f"record_secret failed: {resp.status} {resp.reason}: "
                 f"{resp_body.decode('utf-8', 'replace')}"
             )
         return json.loads(resp_body)

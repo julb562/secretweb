@@ -33,11 +33,38 @@ server, and tell you to run:
 Do this ONE HOST AT A TIME - move to the next host only once this one's
 systemd service is confirmed running.
 
-Using the client (store/retrieve a share against a peer)
-----------------------------------------------------------
+Creating a secret
+-------------------
 
 certificates/private.pem is only readable by {{ secretweb_user }}
-(mode 600), so run the client as that user either way:
+(mode 600), so run the client as that user either way. It figures out
+which hosts to publish to, and how many shares/what treshold, from
+hosts.json on its own - no need to name peers or point at cert files
+by hand.
+
+{% if secretweb_symlink_client %}
+    echo -n 'the secret value' | sudo -u {{ secretweb_user }} secretweb-client store-secret --name my-secret
+{% else %}
+No /usr/local/bin symlink in this environment - call secretweb_client.py directly:
+
+    echo -n 'the secret value' | sudo -u {{ secretweb_user }} {{ secretweb_install_dir }}/venv/bin/python3 {{ secretweb_install_dir }}/secretweb_client.py store-secret --name my-secret
+{% endif %}
+
+Piping the value in via stdin (as above) is deliberate - a `--secret`
+option also exists but is visible to other local users via ps/proc while
+the command runs, so stdin is the safer default. On success this prints
+the uuid and how many/which hosts accepted a share; if fewer than the
+required treshold accept it, the secret is reported as failed and is
+*not* recorded as one of this host's own secrets.
+
+Decrypting an existing secret isn't built yet - `store-secret` only
+covers creation.
+
+Lower-level: store/retrieve one already-made share against one named peer
+--------------------------------------------------------------------------
+
+This is what `store-secret` above uses internally - reach for it directly
+only for manual ops/debugging against a single host:
 
 {% if secretweb_symlink_client %}
     sudo -u {{ secretweb_user }} secretweb-client store-share --host <peer-address> --port {{ secretweb_port }} \
@@ -45,29 +72,17 @@ certificates/private.pem is only readable by {{ secretweb_user }}
         --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
         --key-file {{ secretweb_install_dir }}/certificates/private.pem \
         --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
-
-    sudo -u {{ secretweb_user }} secretweb-client get-share --host <peer-address> --port {{ secretweb_port }} \
-        --uuid <share-uuid> \
-        --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
-        --key-file {{ secretweb_install_dir }}/certificates/private.pem \
-        --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
 {% else %}
-No /usr/local/bin symlink in this environment - call peer_client.py directly:
-
     sudo -u {{ secretweb_user }} {{ secretweb_install_dir }}/venv/bin/python3 {{ secretweb_install_dir }}/peer_client.py store-share \
         --host <peer-address> --port {{ secretweb_port }} \
         --data-file share.json \
         --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
         --key-file {{ secretweb_install_dir }}/certificates/private.pem \
         --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
-
-    sudo -u {{ secretweb_user }} {{ secretweb_install_dir }}/venv/bin/python3 {{ secretweb_install_dir }}/peer_client.py get-share \
-        --host <peer-address> --port {{ secretweb_port }} \
-        --uuid <share-uuid> \
-        --cert-file {{ secretweb_install_dir }}/certificates/cert.pem \
-        --key-file {{ secretweb_install_dir }}/certificates/private.pem \
-        --ca-file {{ secretweb_install_dir }}/certificates/ca.crt
 {% endif %}
+
+(`get-share` works the same way, with `--uuid <share-uuid>` instead of
+`--data-file`.)
 
 Stopping / restarting
 -----------------------

@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+import hosts_data
 import initiator
 import peer_client
 import shamir
@@ -83,7 +84,7 @@ def peer_network(tmp_path):
 
     data_dir = own_dir / "data"
     data_dir.mkdir()
-    hosts_data = {
+    hosts_json = {
         "hosts": {
             "good-client": {"status": "local", "address": "127.0.0.2", "port": port},
             "peer3": {"status": "default", "address": "127.0.0.3", "port": port},
@@ -91,7 +92,7 @@ def peer_network(tmp_path):
         }
     }
     with open(data_dir / "hosts.json", "w") as f:
-        json.dump(hosts_data, f)
+        json.dump(hosts_json, f)
 
     try:
         yield {"own_basedir": str(own_dir), "port": port}
@@ -151,10 +152,10 @@ def test_collect_key1_succeeds_with_unreachable_peer_declared_in_hosts(peer_netw
     # reconstruction must skip the phantom peer rather than getting stuck.
     hosts_path = os.path.join(peer_network["own_basedir"], "data", "hosts.json")
     with open(hosts_path) as f:
-        hosts_data = json.load(f)
-    hosts_data["hosts"]["ghost"] = {"status": "default", "address": "127.0.0.5", "port": peer_network["port"]}
+        hosts_json = json.load(f)
+    hosts_json["hosts"]["ghost"] = {"status": "default", "address": "127.0.0.5", "port": peer_network["port"]}
     with open(hosts_path, "w") as f:
-        json.dump(hosts_data, f)
+        json.dump(hosts_json, f)
 
     config = _own_config(peer_network)
     key1_uuid = _publish_key1(peer_network, "still-the-real-value")
@@ -171,29 +172,6 @@ def test_collect_key1_raises_on_missing_config_metadata(peer_network):
 
     with pytest.raises(initiator.Key1ReconstructionError):
         initiator._collect_key1(peer_network["own_basedir"], config)
-
-
-def test_own_host_entry_requires_a_local_status_host():
-    with pytest.raises(initiator.Key1ReconstructionError):
-        initiator._own_host_entry({"hosts": {"a": {"status": "default"}}})
-
-
-def test_own_host_entry_finds_the_local_one():
-    hosts_data = {"hosts": {"a": {"status": "default"}, "b": {"status": "local"}}}
-    assert initiator._own_host_entry(hosts_data) == {"name": "b", "status": "local"}
-
-
-def test_trusted_peers_excludes_self_and_untrusted_statuses():
-    hosts_data = {
-        "hosts": {
-            "me": {"status": "local"},
-            "good": {"status": "default"},
-            "bad": {"status": "compromised"},
-            "gone": {"status": "deleted"},
-        }
-    }
-    peers = initiator._trusted_peers(hosts_data, "me")
-    assert {p["name"] for p in peers} == {"good"}
 
 
 def test_collect_key1_keeps_retrying_instead_of_giving_up(monkeypatch):
@@ -217,14 +195,14 @@ def test_collect_key1_keeps_retrying_instead_of_giving_up(monkeypatch):
     monkeypatch.setattr(peer_client, "retrieve_share", fake_retrieve_share)
     monkeypatch.setattr(initiator.time, "sleep", lambda seconds: None)
 
-    hosts_data = {
+    fake_hosts_data = {
         "hosts": {
             "me": {"status": "local", "address": "127.0.0.9", "port": 1},
             "peer-a": {"status": "default", "address": "127.0.0.10", "port": 1},
             "peer-b": {"status": "default", "address": "127.0.0.11", "port": 1},
         }
     }
-    monkeypatch.setattr(initiator, "_load_hosts_json", lambda basedir: hosts_data)
+    monkeypatch.setattr(hosts_data, "load_hosts_json", lambda basedir: fake_hosts_data)
 
     config = configparser.ConfigParser()
     config["secretweb"] = {

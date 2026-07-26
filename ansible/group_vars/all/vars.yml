@@ -36,6 +36,8 @@ secretweb_app_files:
   - initiator.py
   - setup_secretweb.py
   - peer_client.py
+  - secretweb_client.py
+  - hosts_data.py
   - shamir.py
   - cryptofile.py
   - key_handoff.py

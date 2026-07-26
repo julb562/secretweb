@@ -11,7 +11,10 @@ it here already presented a certificate signed by our trusted CA. The
 /shares/<uuid> routes additionally check that a share's claimed owner
 matches the connecting client certificate's identity (see
 _require_owner_matches_client_cert()), since simply being a trusted host
-isn't enough to store or retrieve another host's share.
+isn't enough to store or retrieve another host's share. /secrets/<name>
+reuses that same check against this server's own identity, so only this
+host's own local client (see secretweb_client.py) can ever record one of
+this host's own secrets.
 """
 from __future__ import annotations
 
@@ -25,6 +28,7 @@ import bottle
 import click
 
 import cryptofile
+import hosts_data
 import key_handoff
 import shamir
 import timeutils
@@ -32,7 +36,7 @@ import timeutils
 DEFAULT_BASEDIR = os.path.dirname(os.path.abspath(__file__))
 
 HOSTS_FILENAME = "hosts.dta"
-HOSTS_PLAINTEXT_FILENAME = "hosts.json"
+HOSTS_PLAINTEXT_FILENAME = hosts_data.HOSTS_PLAINTEXT_FILENAME
 HOSTS_FILE_PURPOSE = "secretweb-hosts-v1"
 
 SITES_FILENAME = "sites.dta"
@@ -135,6 +139,50 @@ def get_share(share_uuid):
 def _persist_shares() -> None:
     shares_path = os.path.join(app.config["basedir"], "data", SHARES_FILENAME)
     cryptofile.save(shares_path, app.config["key1"], SHARES_FILE_PURPOSE, app.config["shares"])
+
+
+@app.route("/secrets/<name>", method="POST")
+def store_secret_metadata(name):
+    """Records one of this host's own secrets (uuid/treshold/shares_saved)
+    after secretweb_client.py has already published its shares to enough
+    peers - not the shares themselves, just this host's own bookkeeping of
+    what it has out on the network. Only this host's own local client can
+    call this: _require_owner_matches_client_cert() is reused here against
+    this server's own identity (from hosts.dta's "local" entry) rather
+    than a caller-supplied owner field, so only a caller presenting this
+    host's own certificate - i.e. nobody but this host's own CLI - ever
+    satisfies it. Re-posting the same name overwrites (a new version of
+    that secret), matching "latest version of SECRET_NAME" - no
+    conflict-guard needed here the way /shares has one, since this is
+    this host's own, self-managed list."""
+    payload = bottle.request.json
+    if not isinstance(payload, dict):
+        bottle.abort(400, "body must be a JSON object")
+    try:
+        uuid = payload["uuid"]
+        treshold = int(payload["treshold"])
+        shares_saved = int(payload["shares_saved"])
+    except (KeyError, TypeError, ValueError) as exc:
+        bottle.abort(400, f"malformed secret metadata: {exc}")
+
+    own_name = hosts_data.own_host_entry(app.config["hosts"])["name"]
+    _require_owner_matches_client_cert(own_name)
+
+    record = {
+        "uuid": uuid,
+        "treshold": treshold,
+        "shares_saved": shares_saved,
+        "last_updated": timeutils.utc_now_iso(),
+    }
+    app.config["secrets"]["secrets"][name] = record
+    _persist_secrets()
+    bottle.response.status = 201
+    return record
+
+
+def _persist_secrets() -> None:
+    secrets_path = os.path.join(app.config["basedir"], "data", SECRETS_FILENAME)
+    cryptofile.save(secrets_path, app.config["key1"], SECRETS_FILE_PURPOSE, app.config["secrets"])
 
 
 class MTLSWSGIRefServer(bottle.WSGIRefServer):

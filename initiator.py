@@ -14,7 +14,6 @@ systemd ExecStop, since server.py can't be a normal supervised service -
 see start_server()'s docstring) has something to stop.
 """
 import configparser
-import json
 import os
 import random
 import signal
@@ -26,9 +25,9 @@ import time
 import click
 
 import cryptofile
+import hosts_data
 import key_handoff
 import peer_client
-import server
 import shamir
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,8 +36,6 @@ SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.py")
 
 PID_FILENAME = "server.pid"
 POLL_INTERVAL_SECONDS = 10
-
-_UNTRUSTED_STATUSES = {"compromised", "deleted", "disappeared"}
 
 
 class Key1ReconstructionError(Exception):
@@ -63,33 +60,6 @@ def _cert_paths(basedir: str, config: configparser.ConfigParser) -> tuple:
     return cert_file, key_file, ca_file
 
 
-def _load_hosts_json(basedir: str) -> dict:
-    """Plain JSON read of the plaintext hosts.json mirror - no KEY1
-    needed to read it, which is exactly why server.ensure_hosts_file()
-    maintains that mirror in the first place."""
-    path = os.path.join(basedir, "data", server.HOSTS_PLAINTEXT_FILENAME)
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _own_host_entry(hosts_data: dict) -> dict:
-    for name, record in hosts_data.get("hosts", {}).items():
-        if record.get("status") == "local":
-            return {"name": name, **record}
-    raise Key1ReconstructionError(
-        "no host in hosts.json has status 'local' - can't determine this host's own identity"
-    )
-
-
-def _trusted_peers(hosts_data: dict, own_name: str) -> list:
-    peers = []
-    for name, record in hosts_data.get("hosts", {}).items():
-        if name == own_name or record.get("status") in _UNTRUSTED_STATUSES:
-            continue
-        peers.append({"name": name, **record})
-    return peers
-
-
 def _collect_key1(basedir: str, config: configparser.ConfigParser) -> str:
     """Reconstructs this host's own KEY1 from peer shares. No bounded
     number of retry rounds - same reasoning as
@@ -108,9 +78,12 @@ def _collect_key1(basedir: str, config: configparser.ConfigParser) -> str:
             "had key1 published to it yet (see setup_secretweb.py)"
         ) from exc
 
-    hosts_data = _load_hosts_json(basedir)
-    own_host = _own_host_entry(hosts_data)
-    peers = _trusted_peers(hosts_data, own_host["name"])
+    hosts = hosts_data.load_hosts_json(basedir)
+    try:
+        own_host = hosts_data.own_host_entry(hosts)
+    except hosts_data.OwnHostNotFoundError as exc:
+        raise Key1ReconstructionError(str(exc)) from exc
+    peers = hosts_data.trusted_peers(hosts, own_host["name"])
     if not peers:
         raise Key1ReconstructionError("no trusted peers in hosts.json to ask for key1 shares")
 
