@@ -1,15 +1,17 @@
 ---
 # Installs and enables (but does not start) the systemd unit for one
-# environment, plus - production only - the /usr/local/bin symlink.
+# environment, plus its <install_dir>/bin/secretweb-client wrapper -
+# always installed, in every environment - and, production only, a
+# /usr/local/bin symlink to it.
 #
 # Deliberately no "remove the symlink if secretweb_symlink_client is false"
 # task: this role runs once per environment on the same host (prod, then
 # test - see site.yml), and since /usr/local/bin/secretweb-client
 # is a single, environment-agnostic path, an unconditional removal in the
 # test iteration would delete the symlink the prod iteration just created
-# moments earlier in the same run. Skipping creation (via the `when`
-# guards below) is enough to keep test symlink-free without touching
-# anything prod already put there.
+# moments earlier in the same run. Skipping creation (via the `when` guard
+# on the symlink task below) is enough to keep test symlink-free without
+# touching anything prod already put there.
 
 - name: Install the systemd unit
   ansible.builtin.template:
@@ -38,7 +40,6 @@
     owner: "{{ secretweb_user }}"
     group: "{{ secretweb_user }}"
     mode: "0755"
-  when: secretweb_symlink_client
 
 - name: Install the secretweb-client wrapper
   ansible.builtin.template:
@@ -47,7 +48,6 @@
     owner: "{{ secretweb_user }}"
     group: "{{ secretweb_user }}"
     mode: "0755"
-  when: secretweb_symlink_client
 
 - name: Symlink secretweb-client into /usr/local/bin
   ansible.builtin.file:
