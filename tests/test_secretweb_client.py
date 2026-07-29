@@ -11,8 +11,10 @@ from click.testing import CliRunner
 
 import cryptofile
 import initiator
+import peer_client
 import secretweb_client
 import server
+import shamir
 
 TEST_CERTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
 PEER_KEY1 = "test-peer-key1-0123456789abcdef"
@@ -261,6 +263,90 @@ def test_get_secret_fails_clearly_for_unknown_name(network):
     result = runner.invoke(
         secretweb_client.cli,
         ["get-secret", "--name", "never-created", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+
+
+def _publish_key1(network, key1_value, treshold=2):
+    """Shamir-splits key1_value into one share per peer and stores them
+    directly via peer_client, then writes the matching key1-name/uuid/
+    treshold/shares fields into own's config.ini - the same fields
+    setup_secretweb.py records after publishing key1, and what get-key1
+    (like initiator._collect_key1()) reads to know what to ask peers for."""
+    peer_addresses = ("127.0.0.13", "127.0.0.14", "127.0.0.15")
+    secret = shamir.ShamirSecret("key1", "good-client", shares=len(peer_addresses), treshold=treshold)
+    secret.create_secret(key1_value)
+    cert_file = os.path.join(network["own_basedir"], "certificates", "cert.pem")
+    key_file = os.path.join(network["own_basedir"], "certificates", "private.pem")
+    ca_file = os.path.join(network["own_basedir"], "certificates", "ca.crt")
+    for address, participant_data in zip(peer_addresses, secret.iterate_participants()):
+        peer_client.store_share(address, network["port"], cert_file, key_file, ca_file, participant_data)
+
+    config_file = os.path.join(network["own_basedir"], "data", "config.ini")
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    config["secretweb"]["key1-name"] = "key1"
+    config["secretweb"]["key1-uuid"] = secret.uuid
+    config["secretweb"]["key1-treshold"] = str(treshold)
+    config["secretweb"]["key1-shares"] = str(len(peer_addresses))
+    with open(config_file, "w") as f:
+        config.write(f)
+
+
+def test_get_key1_reconstructs_key1_from_peer_shares(network):
+    _publish_key1(network, "the-real-key1-value")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-key1", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "the-real-key1-value\n"
+
+
+def test_get_key1_succeeds_when_one_peer_is_down(network):
+    _publish_key1(network, "the-real-key1-value")
+
+    down_peer = network["peers"][0]
+    down_peer.terminate()
+    down_peer.wait(timeout=3)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-key1", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "the-real-key1-value\n"
+
+
+def test_get_key1_fails_clearly_when_too_many_peers_are_down(network):
+    _publish_key1(network, "the-real-key1-value")
+
+    for proc in network["peers"][:2]:
+        proc.terminate()
+        proc.wait(timeout=3)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-key1", "--basedir", network["own_basedir"]],
+    )
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+
+
+def test_get_key1_fails_clearly_when_config_missing_key1_metadata(network):
+    runner = CliRunner()
+    result = runner.invoke(
+        secretweb_client.cli,
+        ["get-key1", "--basedir", network["own_basedir"]],
     )
 
     assert result.exit_code != 0

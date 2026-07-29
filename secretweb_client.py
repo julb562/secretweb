@@ -18,6 +18,18 @@ asked - never a peer, which could otherwise lie about it - because the
 same owner-vs-certificate check that lets only this host publish its own
 secrets also means only this host can ever read its own bookkeeping back
 (see server.get_secret_metadata()).
+
+get-key1: the same reconstruct-from-peer-shares mechanism as get-secret,
+for KEY1 itself. KEY1 is never recorded in this host's own secrets.dta
+(it's published once, at bootstrap, by setup_secretweb.py - see
+initiator._collect_key1(), which this mirrors), so its name/uuid/treshold
+come from config.ini instead of a local server lookup. Meant for an
+operator to run by hand - e.g. to copy KEY1 out to an external keyvault
+as a break-glass backup against a network-wide outage that leaves too few
+peers up for initiator.py's own boot-time reconstruction to meet
+treshold. No such vault integration lives here: this just reconstructs
+and prints KEY1, same as any other secret - what an operator does with it
+afterward is their own manual step.
 """
 from __future__ import annotations
 
@@ -252,6 +264,88 @@ def get_secret_cmd(name: str, basedir: str, config_file: str) -> None:
         raise click.ClickException(f"reconstruction failed: {exc}")
 
     click.echo(secret_value)
+
+
+@cli.command("get-key1")
+@click.option(
+    "--basedir",
+    default=DEFAULT_BASEDIR,
+    show_default=True,
+    help="Project base directory (holds data/ and certificates/ subdirectories).",
+)
+@click.option(
+    "--config-file",
+    default=None,
+    help="Path to config.ini. Defaults to <basedir>/data/config.ini.",
+)
+def get_key1_cmd(basedir: str, config_file: str) -> None:
+    """Reconstructs this host's own KEY1 from peer shares and prints it to
+    stdout - a manual break-glass path (e.g. to copy KEY1 out to an
+    external keyvault) distinct from initiator.py's boot-time
+    reconstruction, which starts the server; this command never touches
+    the local server. KEY1's name/uuid/treshold come from config.ini (see
+    setup_secretweb.py), not a local secrets record, since KEY1 itself is
+    never recorded there. Same single-pass-over-peers, stdout-carries-only-
+    the-value contract as get-secret - progress goes to stderr, so this is
+    pipeable too."""
+    if config_file is None:
+        config_file = os.path.join(basedir, "data", "config.ini")
+    config = _load_config(config_file)
+    section = config["secretweb"]
+    try:
+        key1_name = section["key1-name"]
+        key1_uuid = section["key1-uuid"]
+        key1_treshold = section.getint("key1-treshold")
+        key1_shares = section.getint("key1-shares")
+    except KeyError as exc:
+        raise click.ClickException(
+            f"config.ini is missing key1 metadata ({exc}) - this host hasn't "
+            "had key1 published to it yet (see setup_secretweb.py)"
+        )
+
+    cert_file, key_file, ca_file = _cert_paths(basedir, config)
+    port = config.getint("secretweb", "server-port")
+
+    hosts = hosts_data.load_hosts_json(basedir)
+    own_host = hosts_data.own_host_entry(hosts)
+    peers = hosts_data.trusted_peers(hosts, own_host["name"])
+    random.shuffle(peers)
+
+    decoder = shamir.ShamirSecret(
+        key1_name, own_host["name"], shares=key1_shares, treshold=key1_treshold,
+    )
+
+    obtained = 0
+    for peer in peers:
+        if decoder.ready_to_decode:
+            break
+        try:
+            participant_data = peer_client.retrieve_share(
+                peer["address"], port, cert_file, key_file, ca_file, key1_uuid,
+            )
+        except (OSError, peer_client.ShareNotFoundError, peer_client.PeerRequestError) as exc:
+            click.echo(f"  {peer['name']}: unavailable ({exc})", err=True)
+            continue
+        try:
+            decoder.populate_decoder(participant_data)
+        except shamir.InvalidShareError as exc:
+            click.echo(f"  {peer['name']}: rejected ({exc})", err=True)
+            continue
+        click.echo(f"  {peer['name']}: OK", err=True)
+        obtained += 1
+
+    if not decoder.ready_to_decode:
+        raise click.ClickException(
+            f"only obtained {obtained} share(s), need {key1_treshold} - "
+            "not enough peers responded"
+        )
+
+    try:
+        key1 = decoder.decode()
+    except shamir.ShareReconstructionError as exc:
+        raise click.ClickException(f"reconstruction failed: {exc}")
+
+    click.echo(key1)
 
 
 if __name__ == "__main__":
